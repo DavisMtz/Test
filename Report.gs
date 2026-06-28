@@ -18,6 +18,7 @@ function buildReport(profile) {
     title: 'Perfil integral de ' + name,
     generatedAt: profile.completedAt,
     intro: reportIntro_(profile, name),
+    metrics: buildMetrics_(profile),
     sections: [
       personalitySection_(profile),
       cognitiveSection_(profile),
@@ -29,6 +30,44 @@ function buildReport(profile) {
     disclaimer: 'Este informe tiene fines de autoconocimiento y demostración. ' +
       'No constituye un diagnóstico clínico ni una medida de selección. Los baremos ' +
       'son ilustrativos y deben calibrarse con una muestra normativa antes de cualquier uso aplicado.'
+  };
+}
+
+/**
+ * Datos numéricos compactos para los gráficos animados del informe (cliente).
+ */
+function buildMetrics_(profile) {
+  var d = profile.personality.domains;
+  var order = ['H', 'E', 'X', 'A', 'C', 'O'];
+  var palette = { H: '#7c9cff', E: '#ff7ab8', X: '#ffb648', A: '#33d6a6', C: '#5b8cff', O: '#9a6bff' };
+  var hexaco = order.map(function (k) {
+    var x = d[k];
+    var pct = (x.percentileAdjusted != null) ? x.percentileAdjusted : x.percentile;
+    return { code: k, name: x.name, percentile: pct, basePercentile: x.percentile,
+             level: x.level, ocean: x.ocean, oceanName: x.oceanName, color: palette[k] };
+  });
+  var c = profile.cognitive;
+  var cognitive = [
+    { key: 'g',  label: 'Capacidad general (g)',     iq: c.g.iq,  percentile: c.g.percentile,  level: c.g.level,  color: '#5b8cff' },
+    { key: 'Gf', label: 'Razonamiento fluido (Gf)',  iq: c.Gf.iq, percentile: c.Gf.percentile, level: c.Gf.level, color: '#33d6a6' },
+    { key: 'Gc', label: 'Conocimiento (Gc)',         iq: c.Gc.iq, percentile: c.Gc.percentile, level: c.Gc.level, color: '#9a6bff' }
+  ];
+  var tf = profile.emotional.trait.factors;
+  var eiTrait = Object.keys(tf).map(function (k) {
+    return { name: tf[k].name, percentile: tf[k].percentile, level: tf[k].level };
+  });
+  var br = profile.emotional.ability.branches;
+  var eiAbility = Object.keys(br).filter(function (k) { return br[k].score100 != null; })
+    .map(function (k) { return { name: br[k].name, score100: br[k].score100 }; });
+
+  return {
+    hexaco: hexaco,
+    cognitive: cognitive,
+    eiTraitGlobal: profile.emotional.trait.global.percentile,
+    eiTrait: eiTrait,
+    eiAbilityGlobal: profile.emotional.ability.global100,
+    eiAbility: eiAbility,
+    stealthStyle: profile.stealth.deliberationStyle
   };
 }
 

@@ -1,315 +1,477 @@
 <script>
-/* Cliente del test. Orquesta el wizard, captura respuestas y tiempos de
-   respuesta (evidencia de proceso), y envía todo al servidor para puntuar. */
+/* =====================================================================
+   Cliente — wizard interactivo con animaciones GSAP 3.13.
+   Lógica de datos (cola de ítems, respuestas, tiempos, envío) intacta;
+   se añade: etapas por módulo, atajos de teclado, transiciones y un
+   dashboard animado de resultados. Degrada con elegancia si GSAP falla.
+   ===================================================================== */
 (function () {
   'use strict';
 
+  var GS = (typeof gsap !== 'undefined') ? gsap : null;
+
   var STATE = {
-    instrument: null,
-    queue: [],          // lista plana de ítems a presentar
-    index: 0,
-    responses: {},      // itemId -> valor
-    rt: {},             // itemId -> ms
-    itemShownAt: 0,
-    participant: {},
-    startedAt: 0
+    instrument:null, queue:[], index:0,
+    responses:{}, rt:{}, itemShownAt:0,
+    participant:{}, startedAt:0,
+    introduced:{}, currentModule:null,
+    activeScreen:'welcome', pendingModule:null
   };
 
+  var STAGES = {
+    personality:{ n:1, icon:'🧭', title:'Cómo eres',
+      sub:'Rasgos de personalidad (HEXACO / Big Five). No hay respuestas correctas: responde con sinceridad.' },
+    cognitive:{ n:2, icon:'🧠', title:'Cómo piensas',
+      sub:'Retos de razonamiento y conocimiento. Tómate tu tiempo y elige la mejor opción.' },
+    emotional:{ n:3, icon:'💗', title:'Cómo sientes',
+      sub:'Tu mundo emocional: cómo te percibes y cómo resuelves situaciones reales.' },
+    stealth:{ n:4, icon:'🎮', title:'Cómo decides',
+      sub:'Escenarios reales. Elige lo que harías de verdad; también observamos tu estilo de decisión.' }
+  };
   var MODULE_LABEL = {
-    personality: 'Cómo eres · Personalidad',
-    cognitive:   'Cómo piensas · Cognición',
-    emotional:   'Cómo sientes · Emoción',
-    stealth:     'Cómo decides · Decisión'
+    personality:'Cómo eres · Personalidad', cognitive:'Cómo piensas · Cognición',
+    emotional:'Cómo sientes · Emoción', stealth:'Cómo decides · Decisión'
   };
+  var MODULE_ORDER = ['personality','cognitive','emotional','stealth'];
 
-  function $(id) { return document.getElementById(id); }
-  function show(screen) {
-    ['welcome', 'test', 'loading', 'report'].forEach(function (s) {
-      $('screen-' + s).classList.toggle('active', s === screen);
-    });
-    window.scrollTo(0, 0);
+  function $(id){ return document.getElementById(id); }
+
+  /* ---------------- Animación (con degradado elegante) ---------------- */
+  function gFrom(t,v){ if(GS) GS.from(t,v); }
+  function gTo(t,v){ if(GS) GS.to(t,v); }
+  function countUp(el, to, fmt){
+    fmt = fmt || function(n){ return n; };
+    if(!GS){ el.textContent = fmt(to); return; }
+    var o={v:0}; GS.to(o,{ v:to, duration:1.1, ease:'power2.out',
+      onUpdate:function(){ el.textContent = fmt(Math.round(o.v)); } });
   }
 
-  /* ---------------------------------------------------------- Arranque */
-  document.addEventListener('DOMContentLoaded', function () {
+  function show(screen){
+    STATE.activeScreen = screen;
+    ['welcome','stage','test','loading','report'].forEach(function(s){
+      $('screen-'+s).classList.toggle('active', s===screen);
+    });
+    window.scrollTo(0,0);
+  }
+
+  /* ---------------------------- Arranque ---------------------------- */
+  document.addEventListener('DOMContentLoaded', function(){
     $('btn-start').addEventListener('click', startTest);
+    $('btn-stage').addEventListener('click', stageContinue);
     $('btn-next').addEventListener('click', next);
     $('btn-prev').addEventListener('click', prev);
-    google.script.run.withSuccessHandler(function (inst) {
-      STATE.instrument = inst;
-    }).withFailureHandler(function (e) {
-      alert('No se pudo cargar el instrumento: ' + e);
-    }).getInstrumentForClient();
+    document.addEventListener('keydown', onKey);
+
+    if(GS){
+      GS.to('.o1',{ x:50, y:40, duration:9, repeat:-1, yoyo:true, ease:'sine.inOut' });
+      GS.to('.o2',{ x:-60, y:30, duration:11, repeat:-1, yoyo:true, ease:'sine.inOut' });
+      GS.to('.o3',{ x:40, y:-30, duration:10, repeat:-1, yoyo:true, ease:'sine.inOut' });
+      GS.from('#screen-welcome .card > *',{ y:24, opacity:0, duration:.6, stagger:.07, ease:'power3.out', delay:.1 });
+    }
+
+    google.script.run
+      .withSuccessHandler(function(inst){ STATE.instrument = inst; })
+      .withFailureHandler(function(e){ alert('No se pudo cargar el instrumento: '+e); })
+      .getInstrumentForClient();
   });
 
-  function startTest() {
-    if (!STATE.instrument) { alert('Aún cargando, intenta de nuevo en un momento.'); return; }
+  function startTest(){
+    if(!STATE.instrument){ alert('Cargando aún, intenta de nuevo en un momento.'); return; }
     STATE.participant = {
-      name: ($('in-name').value || '').trim() || 'Participante',
-      age: $('in-age').value || '',
-      gender: $('in-gender').value || ''
+      name:($('in-name').value||'').trim() || 'Participante',
+      age:$('in-age').value||'', gender:$('in-gender').value||''
     };
-    // Orden por módulos para una experiencia coherente.
-    var order = ['personality', 'cognitive', 'emotional', 'stealth'];
-    STATE.queue = STATE.instrument.items.slice().sort(function (a, b) {
-      return order.indexOf(a.module) - order.indexOf(b.module);
+    STATE.queue = STATE.instrument.items.slice().sort(function(a,b){
+      return MODULE_ORDER.indexOf(a.module) - MODULE_ORDER.indexOf(b.module);
     });
-    STATE.index = 0;
-    STATE.startedAt = Date.now();
-    show('test');
-    render();
+    buildSegments();
+    STATE.index = 0; STATE.startedAt = Date.now();
+    goCurrent();
   }
 
-  /* ---------------------------------------------------------- Render */
-  function render() {
+  function buildSegments(){
+    var counts = {};
+    MODULE_ORDER.forEach(function(m){ counts[m]=0; });
+    STATE.queue.forEach(function(it){ counts[it.module]++; });
+    var seg = $('segments'); seg.innerHTML='';
+    MODULE_ORDER.forEach(function(m){
+      var d=document.createElement('div'); d.dataset.module=m;
+      d.innerHTML='<i></i>'; seg.appendChild(d);
+    });
+  }
+
+  /* ----------------------- Navegación + etapas ---------------------- */
+  function goCurrent(){
     var item = STATE.queue[STATE.index];
-    if (!item) return;
+    STATE.currentModule = item.module;
+    if(!STATE.introduced[item.module]){
+      STATE.introduced[item.module] = true;
+      STATE.pendingModule = item.module;
+      showStage(item.module);
+    } else {
+      showQuestion();
+    }
+  }
+
+  function showStage(module){
+    var s = STAGES[module];
+    $('stage-icon').textContent = s.icon;
+    $('stage-kicker').textContent = 'Etapa '+s.n+' de 4';
+    $('stage-title').textContent = s.title;
+    $('stage-sub').textContent = s.sub;
+    show('stage');
+    gFrom('#stage-icon',{ scale:0, rotate:-30, duration:.7, ease:'back.out(1.7)' });
+    gFrom('#screen-stage .stage-kicker, #screen-stage .stage-title, #screen-stage .stage-sub, #btn-stage',
+      { y:22, opacity:0, duration:.5, stagger:.08, ease:'power3.out', delay:.15 });
+  }
+  function stageContinue(){ show('test'); showQuestion(); }
+
+  function showQuestion(){
+    var item = STATE.queue[STATE.index];
+    if(!item) return;
     STATE.itemShownAt = Date.now();
 
     $('module-tag').textContent = MODULE_LABEL[item.module] || item.module;
-    $('counter').textContent = (STATE.index + 1) + ' / ' + STATE.queue.length;
-    $('progress-bar').style.width = ((STATE.index) / STATE.queue.length * 100) + '%';
-    $('btn-prev').disabled = STATE.index === 0;
-    $('btn-next').textContent = (STATE.index === STATE.queue.length - 1) ? 'Finalizar' : 'Siguiente';
+    $('counter').textContent = (STATE.index+1)+' / '+STATE.queue.length;
+    updateProgress();
+    $('btn-prev').disabled = STATE.index===0;
+    $('btn-next').textContent = (STATE.index===STATE.queue.length-1) ? 'Finalizar ✓' : 'Siguiente →';
 
     var card = $('question-card');
-    card.innerHTML = '';
-    var type = item.type;
-    if (type === 'likert') renderLikert(card, item);
-    else if (type === 'mcq') renderMcq(card, item);
-    else if (type === 'forced_choice') renderForcedChoice(card, item);
-    else if (type === 'sjt') renderMcq(card, item, 'Elige la opción MÁS eficaz / acertada.');
-    else if (type === 'scenario') renderMcq(card, item, '¿Qué harías? Elige con sinceridad.');
+    card.innerHTML='';
+    var t=item.type;
+    if(t==='likert') renderLikert(card,item);
+    else if(t==='mcq') renderMcq(card,item,'Elige una opción.');
+    else if(t==='sjt') renderMcq(card,item,'Elige la opción MÁS acertada.');
+    else if(t==='scenario') renderMcq(card,item,'¿Qué harías? Elige con sinceridad.');
+    else if(t==='forced_choice') renderForcedChoice(card,item);
+
+    gFrom('#question-card > *',{ y:18, opacity:0, duration:.42, stagger:.05, ease:'power3.out' });
   }
 
-  function header(card, item, sub) {
-    var h = document.createElement('div');
-    h.className = 'q-text';
-    h.textContent = item.text || item.prompt || '';
-    card.appendChild(h);
-    if (sub) {
-      var s = document.createElement('div');
-      s.className = 'q-sub';
-      s.textContent = sub;
-      card.appendChild(s);
-    }
+  function updateProgress(){
+    var pct = (STATE.index)/STATE.queue.length*100;
+    if(GS) GS.to('#progress-bar',{ width:pct+'%', duration:.5, ease:'power2.out' });
+    else $('progress-bar').style.width = pct+'%';
+    // Segmentos por módulo
+    var doneModules = {};
+    for(var i=0;i<STATE.index;i++) doneModules[STATE.queue[i].module]=true;
+    var curMod = STATE.queue[STATE.index].module;
+    document.querySelectorAll('#segments > div').forEach(function(d){
+      var m=d.dataset.module;
+      var passed = MODULE_ORDER.indexOf(m) < MODULE_ORDER.indexOf(curMod);
+      d.classList.toggle('done', passed);
+      var fill = d.querySelector('i');
+      if(m===curMod){
+        // progreso dentro del módulo actual
+        var inMod = STATE.queue.filter(function(x){return x.module===m;}).length;
+        var beforeMod = STATE.queue.findIndex(function(x){return x.module===m;});
+        var pos = STATE.index - beforeMod;
+        fill.style.width = Math.round(pos/inMod*100)+'%';
+      } else {
+        fill.style.width = passed ? '100%' : '0%';
+      }
+    });
   }
 
-  function renderLikert(card, item) {
-    var seven = item.scale === 7;
-    header(card, item);
-    var wrap = document.createElement('div');
-    wrap.className = 'likert' + (seven ? ' seven' : '');
-    var current = STATE.responses[item.id];
-    for (var v = 1; v <= item.scale; v++) {
-      (function (val) {
-        var b = document.createElement('button');
-        b.className = 'opt' + (current === val ? ' selected' : '');
-        b.textContent = val;
-        b.style.fontWeight = '700';
-        b.onclick = function () { choose(item.id, val); };
-        wrap.appendChild(b);
+  /* ----------------------------- Render ----------------------------- */
+  function header(card,item,sub){
+    var h=document.createElement('div'); h.className='q-text';
+    h.textContent=item.text||item.prompt||''; card.appendChild(h);
+    if(sub){ var s=document.createElement('div'); s.className='q-sub'; s.textContent=sub; card.appendChild(s); }
+  }
+
+  function renderLikert(card,item){
+    header(card,item);
+    var wrap=document.createElement('div'); wrap.className='likert-wrap';
+    var row=document.createElement('div'); row.className='likert';
+    var current=STATE.responses[item.id];
+    for(var v=1; v<=item.scale; v++){
+      (function(val){
+        var hue = (val-1)/(item.scale-1)*128; // rojo(0) -> verde(128)
+        var color = 'hsl('+hue+',72%,55%)';
+        var b=document.createElement('button');
+        b.className='lk'+(current===val?' selected':'');
+        b.textContent=val;
+        b.style.borderColor=color;
+        b.style.color = current===val ? '#08111f' : color;
+        if(current===val) b.style.background=color;
+        b.setAttribute('aria-label','Opción '+val);
+        b.onclick=function(){ choose(item.id,val); };
+        row.appendChild(b);
       })(v);
     }
+    wrap.appendChild(row);
+    var a=item.anchors||[];
+    var anchors=document.createElement('div'); anchors.className='likert-anchors';
+    anchors.innerHTML='<span>'+esc(a[0]||'En desacuerdo')+'</span><span>'+esc(a[a.length-1]||'De acuerdo')+'</span>';
+    wrap.appendChild(anchors);
     card.appendChild(wrap);
-    var anchors = document.createElement('div');
-    anchors.className = 'likert-anchors';
-    var a = item.anchors || [];
-    anchors.innerHTML = '<span>' + (a[0] || 'En desacuerdo') + '</span><span>' +
-      (a[a.length - 1] || 'De acuerdo') + '</span>';
-    card.appendChild(anchors);
   }
 
-  function renderMcq(card, item, sub) {
-    header(card, item, sub);
-    var wrap = document.createElement('div');
-    wrap.className = 'options';
-    var current = STATE.responses[item.id];
-    item.options.forEach(function (opt, i) {
-      var b = document.createElement('button');
-      b.className = 'opt' + (current === i ? ' selected' : '');
-      b.textContent = opt.text;
-      b.onclick = function () { choose(item.id, i); };
+  function renderMcq(card,item,sub){
+    header(card,item,sub);
+    var wrap=document.createElement('div'); wrap.className='options';
+    var current=STATE.responses[item.id];
+    var letters='ABCDEFGH';
+    item.options.forEach(function(opt,i){
+      var b=document.createElement('button');
+      b.className='opt'+(current===i?' selected':'');
+      b.innerHTML='<span class="key">'+letters[i]+'</span><span>'+esc(opt.text)+'</span>';
+      b.onclick=function(){ choose(item.id,i); };
       wrap.appendChild(b);
     });
     card.appendChild(wrap);
   }
 
-  function renderForcedChoice(card, item) {
-    header(card, item);
-    var hint = document.createElement('div');
-    hint.className = 'fc-hint';
-    hint.textContent = 'Marca M (más parecida a ti) y m (menos parecida). Deben ser distintas.';
+  function renderForcedChoice(card,item){
+    header(card,item);
+    var hint=document.createElement('div'); hint.className='fc-hint';
+    hint.textContent='Marca «+» en la frase MÁS parecida a ti y «–» en la MENOS parecida.';
     card.appendChild(hint);
-
-    var resp = STATE.responses[item.id] || { most: null, least: null };
-    var wrap = document.createElement('div');
-    wrap.className = 'options';
-    item.options.forEach(function (opt, i) {
-      var row = document.createElement('div');
-      row.className = 'fc-row';
-      var pick = document.createElement('div');
-      pick.className = 'fc-pick';
-      var mostBtn = document.createElement('button');
-      mostBtn.textContent = 'M';
-      mostBtn.className = resp.most === i ? 'on-most' : '';
-      mostBtn.onclick = function () {
-        resp.most = (resp.most === i ? null : i);
-        if (resp.least === i) resp.least = null;
-        STATE.responses[item.id] = resp; render();
-      };
-      var leastBtn = document.createElement('button');
-      leastBtn.textContent = 'm';
-      leastBtn.className = resp.least === i ? 'on-least' : '';
-      leastBtn.onclick = function () {
-        resp.least = (resp.least === i ? null : i);
-        if (resp.most === i) resp.most = null;
-        STATE.responses[item.id] = resp; render();
-      };
-      pick.appendChild(mostBtn); pick.appendChild(leastBtn);
-      var st = document.createElement('div');
-      st.className = 'fc-statement';
-      st.textContent = opt.text;
-      row.appendChild(pick); row.appendChild(st);
-      wrap.appendChild(row);
+    var resp=STATE.responses[item.id]||{most:null,least:null};
+    var wrap=document.createElement('div');
+    item.options.forEach(function(opt,i){
+      var row=document.createElement('div');
+      row.className='fc-row'+(resp.most===i?' is-most':'')+(resp.least===i?' is-least':'');
+      var pick=document.createElement('div'); pick.className='fc-pick';
+      var mBtn=document.createElement('button'); mBtn.className='m'+(resp.most===i?' on':''); mBtn.textContent='+';
+      mBtn.title='Más parecida a mí';
+      mBtn.onclick=function(){ resp.most=(resp.most===i?null:i); if(resp.least===i)resp.least=null; STATE.responses[item.id]=resp; showQuestion(); };
+      var lBtn=document.createElement('button'); lBtn.className='l'+(resp.least===i?' on':''); lBtn.textContent='–';
+      lBtn.title='Menos parecida a mí';
+      lBtn.onclick=function(){ resp.least=(resp.least===i?null:i); if(resp.most===i)resp.most=null; STATE.responses[item.id]=resp; showQuestion(); };
+      pick.appendChild(mBtn); pick.appendChild(lBtn);
+      var st=document.createElement('div'); st.className='fc-statement'; st.textContent=opt.text;
+      row.appendChild(pick); row.appendChild(st); wrap.appendChild(row);
     });
     card.appendChild(wrap);
   }
 
-  /* ---------------------------------------------------------- Interacción */
-  function choose(itemId, value) {
-    STATE.responses[itemId] = value;
-    recordRt(itemId);
-    // Avance automático para ítems de selección única (mejor ritmo).
-    var item = STATE.queue[STATE.index];
-    if (item.type !== 'forced_choice') {
-      setTimeout(next, 180);
+  /* --------------------------- Interacción -------------------------- */
+  function choose(itemId,value){
+    STATE.responses[itemId]=value; recordRt(itemId);
+    var item=STATE.queue[STATE.index];
+    if(item.type!=='forced_choice'){
+      paintSelection(item, value); // refleja la selección de inmediato
+      var node = $('question-card').querySelector('.selected');
+      if(node && GS){ GS.fromTo(node,{scale:.9},{scale:1,duration:.28,ease:'back.out(2)'}); }
+      setTimeout(next, 240);
+    } else { showQuestion(); }
+  }
+
+  // Marca visualmente la opción elegida sin re-animar toda la tarjeta.
+  function paintSelection(item, value){
+    var card=$('question-card');
+    if(item.type==='likert'){
+      var btns=card.querySelectorAll('.lk');
+      btns.forEach(function(b,idx){
+        var val=idx+1, hue=(val-1)/(item.scale-1)*128, color='hsl('+hue+',72%,55%)';
+        var on=(val===value);
+        b.classList.toggle('selected',on);
+        b.style.background=on?color:'';
+        b.style.color=on?'#08111f':color;
+      });
     } else {
-      render();
+      var opts=card.querySelectorAll('.opt');
+      opts.forEach(function(b,idx){ b.classList.toggle('selected', idx===value); });
     }
   }
 
-  function recordRt(itemId) {
-    if (STATE.itemShownAt) {
-      var dt = Date.now() - STATE.itemShownAt;
-      // Acumula si el ítem se revisita; conserva el primer tiempo de decisión.
-      if (STATE.rt[itemId] == null) STATE.rt[itemId] = dt;
+  function recordRt(itemId){
+    if(STATE.itemShownAt && STATE.rt[itemId]==null){
+      STATE.rt[itemId]=Date.now()-STATE.itemShownAt;
     }
   }
 
-  function isAnswered(item) {
-    var r = STATE.responses[item.id];
-    if (item.type === 'forced_choice') return r && r.most != null && r.least != null;
-    return r != null;
+  function isAnswered(item){
+    var r=STATE.responses[item.id];
+    if(item.type==='forced_choice') return r && r.most!=null && r.least!=null;
+    return r!=null;
   }
 
-  function next() {
-    var item = STATE.queue[STATE.index];
-    if (!isAnswered(item)) {
-      flashRequired();
-      return;
-    }
+  function next(){
+    var item=STATE.queue[STATE.index];
+    if(!isAnswered(item)){ flashRequired(); return; }
     recordRt(item.id);
-    if (STATE.index < STATE.queue.length - 1) {
-      STATE.index++;
-      render();
-    } else {
-      submit();
-    }
+    if(STATE.index<STATE.queue.length-1){ STATE.index++; goCurrent(); }
+    else submit();
+  }
+  function prev(){ if(STATE.index>0){ STATE.index--; STATE.introduced[STATE.queue[STATE.index].module]=true; showQuestion(); } }
+
+  function flashRequired(){
+    var card=$('question-card');
+    if(GS) GS.fromTo(card,{x:-8},{x:0,duration:.4,ease:'elastic.out(1,0.4)'});
+    card.style.outline='2px solid var(--bad)';
+    setTimeout(function(){ card.style.outline='none'; }, 500);
   }
 
-  function prev() {
-    if (STATE.index > 0) { STATE.index--; render(); }
+  /* ------------------------------ Teclado --------------------------- */
+  function onKey(e){
+    if(STATE.activeScreen==='stage'){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); stageContinue(); } return; }
+    if(STATE.activeScreen==='welcome'){ if(e.key==='Enter') startTest(); return; }
+    if(STATE.activeScreen!=='test') return;
+    var item=STATE.queue[STATE.index];
+    if(!item) return;
+    if(item.type==='likert'){ var n=parseInt(e.key,10); if(n>=1&&n<=item.scale){ choose(item.id,n); return; } }
+    else if(item.type!=='forced_choice'){ var i='abcdefgh'.indexOf((e.key||'').toLowerCase()); if(i>=0&&i<item.options.length){ choose(item.id,i); return; } }
+    if(e.key==='Enter') next();
+    else if(e.key==='Backspace'){ e.preventDefault(); prev(); }
   }
 
-  function flashRequired() {
-    var card = $('question-card');
-    card.style.outline = '2px solid #ff7a7a';
-    setTimeout(function () { card.style.outline = 'none'; }, 500);
-  }
-
-  /* ---------------------------------------------------------- Envío */
-  function submit() {
+  /* ------------------------------ Envío ----------------------------- */
+  function submit(){
+    if(GS) GS.to('#progress-bar',{ width:'100%', duration:.4 });
     show('loading');
-    var payload = {
-      participant: STATE.participant,
-      responses: STATE.responses,
-      meta: { rt: STATE.rt, durationMs: Date.now() - STATE.startedAt }
-    };
+    var payload={ participant:STATE.participant, responses:STATE.responses,
+      meta:{ rt:STATE.rt, durationMs:Date.now()-STATE.startedAt } };
     google.script.run
       .withSuccessHandler(onResult)
-      .withFailureHandler(function (e) {
-        show('test');
-        alert('Error al procesar: ' + e);
-      })
+      .withFailureHandler(function(e){ show('test'); alert('Error al procesar: '+e); })
       .submitAssessment(payload);
   }
 
-  function onResult(res) {
-    if (res == null) {
-      show('test');
-      alert('El servidor no devolvió respuesta. Vuelve a intentar Finalizar; ' +
-            'si persiste, recarga la página. (Tus datos pudieron guardarse igualmente.)');
-      return;
-    }
-    if (!res.ok) {
-      show('test');
-      alert('No se pudo generar el informe: ' + (res.error || 'error desconocido'));
-      return;
-    }
+  function onResult(res){
+    if(res==null){ show('test'); alert('El servidor no devolvió respuesta. Vuelve a intentar Finalizar; si persiste, recarga la página. (Tus datos pudieron guardarse igualmente.)'); return; }
+    if(!res.ok){ show('test'); alert('No se pudo generar el informe: '+(res.error||'error desconocido')); return; }
     renderReport(res);
     show('report');
   }
 
-  /* ---------------------------------------------------------- Informe */
-  function renderReport(res) {
-    var r = res.report;
-    var root = $('report-root');
-    root.innerHTML = '';
+  /* ----------------------------- Informe ---------------------------- */
+  function renderReport(res){
+    var r=res.report, m=r.metrics||{}, root=$('report-root');
+    root.innerHTML='';
 
-    var head = document.createElement('div');
-    head.className = 'card';
-    head.innerHTML = '<h1>' + esc(r.title) + '</h1><p class="lead">' + esc(r.intro) + '</p>';
+    // Hero + gauges
+    var hero=document.createElement('div'); hero.className='card report-hero';
+    hero.innerHTML='<div class="kicker">Tu informe</div><h1>'+esc(r.title)+'</h1>'+
+                   '<p class="lead">'+esc(r.intro)+'</p>';
+    var gauges=document.createElement('div'); gauges.className='gauges';
+    (m.cognitive||[]).forEach(function(c){
+      gauges.appendChild(makeGauge(c.percentile, '#'+'', c.color, String(c.iq), c.label.split('(')[0].trim(), 'CI · P'+c.percentile));
+    });
+    gauges.appendChild(makeGauge(m.eiTraitGlobal||0, '', '#ff7ab8', 'P'+(m.eiTraitGlobal||0), 'IE (rasgo)', 'TEIQue'));
+    if(m.eiAbilityGlobal!=null) gauges.appendChild(makeGauge(m.eiAbilityGlobal, '', '#ffb648', m.eiAbilityGlobal+'', 'IE (habilidad)', 'MSCEIT /100'));
+    hero.appendChild(gauges);
+    root.appendChild(hero);
 
-    var badges = document.createElement('div');
-    badges.className = 'badges';
-    var s = res.summary;
-    badges.innerHTML =
-      badge('g (CI) ' + s.g_iq) + badge('Gf ' + s.gf_iq) + badge('Gc ' + s.gc_iq) +
-      badge('EI rasgo P' + s.ei_trait_pct) +
-      (s.ei_ability_100 != null ? badge('EI habilidad ' + s.ei_ability_100 + '/100') : '');
-    head.appendChild(badges);
-    root.appendChild(head);
+    // Personalidad (barras HEXACO)
+    if(m.hexaco){
+      var pcard=document.createElement('div'); pcard.className='card';
+      pcard.innerHTML='<h3 style="color:#cfe0ff;margin-bottom:4px;">Tu personalidad (HEXACO / Big Five)</h3>'+
+                      '<p class="muted small" style="margin-bottom:14px;">Percentil respecto a la norma.</p>';
+      pcard.appendChild(makeBars(m.hexaco.map(function(h){
+        return { label:h.name, sub:(h.ocean?('≈ '+h.oceanName):'solo HEXACO'), value:h.percentile, lvl:h.level, color:h.color };
+      })));
+      root.appendChild(pcard);
+    }
 
-    r.sections.forEach(function (sec) {
-      var c = document.createElement('div');
-      c.className = 'card report-section';
-      var html = '<h3>' + esc(sec.title) + '</h3>';
-      if (sec.intro) html += '<p class="muted">' + esc(sec.intro) + '</p>';
-      (sec.bullets || []).forEach(function (b) {
-        html += '<div class="bullet"><h4>' + esc(b.heading) + '</h4><p>' + esc(b.body) + '</p></div>';
+    // IE factores
+    if(m.eiTrait){
+      var ecard=document.createElement('div'); ecard.className='card';
+      ecard.innerHTML='<h3 style="color:#cfe0ff;margin-bottom:14px;">Inteligencia emocional · factores (TEIQue)</h3>';
+      ecard.appendChild(makeBars(m.eiTrait.map(function(f){
+        return { label:f.name, sub:'', value:f.percentile, lvl:f.level, color:'#ff7ab8' };
+      })));
+      root.appendChild(ecard);
+    }
+
+    // Badges resumen
+    var s=res.summary;
+    var bcard=document.createElement('div'); bcard.className='card';
+    var badges='<div class="badges">'+
+      badge('g · CI '+s.g_iq)+badge('Gf '+s.gf_iq,'alt')+badge('Gc '+s.gc_iq,'alt')+
+      badge('IE rasgo · P'+s.ei_trait_pct)+
+      (s.ei_ability_100!=null?badge('IE habilidad · '+s.ei_ability_100+'/100','alt'):'')+
+      (m.stealthStyle?badge('Estilo: '+m.stealthStyle):'')+'</div>';
+    bcard.innerHTML='<h3 style="color:#cfe0ff;">Resumen</h3>'+badges;
+    root.appendChild(bcard);
+
+    // Secciones textuales
+    (r.sections||[]).forEach(function(sec){
+      var c=document.createElement('div'); c.className='card report-section';
+      var html='<h3>'+esc(sec.title)+'</h3>';
+      if(sec.intro) html+='<p class="muted">'+esc(sec.intro)+'</p>';
+      (sec.bullets||[]).forEach(function(b){
+        html+='<div class="bullet"><h4>'+esc(b.heading)+'</h4><p>'+esc(b.body)+'</p></div>';
       });
-      if (sec.interplay && sec.interplay.length) {
-        html += '<div class="interplay">';
-        sec.interplay.forEach(function (p) { html += '<p>• ' + esc(p) + '</p>'; });
-        html += '</div>';
+      if(sec.interplay && sec.interplay.length){
+        html+='<div class="interplay">';
+        sec.interplay.forEach(function(p){ html+='<p>• '+esc(p)+'</p>'; });
+        html+='</div>';
       }
-      c.innerHTML = html;
-      root.appendChild(c);
+      c.innerHTML=html; root.appendChild(c);
     });
 
-    var foot = document.createElement('div');
-    foot.className = 'card';
-    foot.innerHTML = '<p class="disclaimer">' + esc(r.disclaimer) + '</p>' +
-      (res.spreadsheetUrl ? '<p class="small muted">Registro guardado (ID ' + esc(res.recordId) + ').</p>' : '') +
-      '<button class="primary" onclick="window.scrollTo(0,0)">Volver arriba</button>';
+    // Pie
+    var foot=document.createElement('div'); foot.className='card';
+    foot.innerHTML='<p class="disclaimer">'+esc(r.disclaimer)+'</p>'+
+      (res.recordId?'<p class="small muted">Registro guardado (ID '+esc(res.recordId)+').</p>':'')+
+      '<button class="primary big" id="btn-top">↑ Volver arriba</button>';
     root.appendChild(foot);
+    $('btn-top').onclick=function(){ window.scrollTo({top:0,behavior:'smooth'}); };
+
+    animateReport(root);
   }
 
-  function badge(t) { return '<span class="badge">' + esc(t) + '</span>'; }
-  function esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  function makeGauge(pct, _u, color, big, cap, sub){
+    pct=Math.max(0,Math.min(100,pct||0));
+    var R=52, C=2*Math.PI*R, off=C*(1-pct/100);
+    var el=document.createElement('div'); el.className='gauge';
+    el.innerHTML=
+      '<svg viewBox="0 0 120 120">'+
+        '<circle class="ring-bg" cx="60" cy="60" r="'+R+'"></circle>'+
+        '<circle class="ring-fg" cx="60" cy="60" r="'+R+'" stroke="'+color+'" '+
+          'stroke-dasharray="'+C+'" stroke-dashoffset="'+C+'"></circle>'+
+        '<text class="g-num" x="60" y="66" text-anchor="middle" fill="#fff">0</text>'+
+      '</svg>'+
+      '<span class="g-cap">'+esc(cap)+'</span><span class="g-sub">'+esc(sub)+'</span>';
+    el._anim=function(){
+      var fg=el.querySelector('.ring-fg'), num=el.querySelector('.g-num');
+      if(GS) GS.to(fg,{ strokeDashoffset:off, duration:1.4, ease:'power3.out' });
+      else fg.setAttribute('stroke-dashoffset', off);
+      // número: si es "P##" o numérico, animar la parte numérica
+      var prefix = /^[A-Za-z]+/.exec(big); prefix=prefix?prefix[0]:'';
+      var target = parseInt(big.replace(/[^0-9]/g,''),10);
+      if(isNaN(target)){ num.textContent=big; return; }
+      countUp(num, target, function(n){ return prefix+n; });
+    };
+    return el;
   }
+
+  function makeBars(rows){
+    var wrap=document.createElement('div'); wrap.className='bars';
+    rows.forEach(function(r){
+      var v=Math.max(0,Math.min(100,r.value||0));
+      var row=document.createElement('div'); row.className='bar-row';
+      row.innerHTML=
+        '<div class="bar-head"><b>'+esc(r.label)+(r.sub?' <span class="muted small">'+esc(r.sub)+'</span>':'')+'</b>'+
+        '<span class="lvl">'+esc(r.lvl||'')+' · P'+v+'</span></div>'+
+        '<div class="track"><i style="background:linear-gradient(90deg,'+r.color+',#33d6a6)"></i></div>';
+      row._fill=row.querySelector('i'); row._target=v;
+      wrap.appendChild(row);
+    });
+    wrap._rows=rows.length?wrap.querySelectorAll('.bar-row'):[];
+    return wrap;
+  }
+
+  function animateReport(root){
+    // Tarjetas: entrada escalonada
+    gFrom(root.querySelectorAll('.card'),{ y:26, opacity:0, duration:.5, stagger:.08, ease:'power3.out' });
+    // Gauges
+    root.querySelectorAll('.gauge').forEach(function(g,i){
+      if(GS) GS.delayedCall(.3+i*.08, g._anim); else g._anim();
+    });
+    // Barras
+    root.querySelectorAll('.bar-row').forEach(function(row,i){
+      var fill=row._fill, target=(row._target||0)+'%';
+      if(GS) GS.to(fill,{ width:target, duration:1.1, delay:.35+i*.05, ease:'power2.out' });
+      else fill.style.width=target;
+    });
+  }
+
+  function badge(t,alt){ return '<span class="badge'+(alt?' alt':'')+'">'+esc(t)+'</span>'; }
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 })();
 </script>
