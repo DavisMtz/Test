@@ -2,8 +2,22 @@
 
 Aplicación web (100% HTML + Google Apps Script) que administra un test interactivo
 de **rasgos de personalidad, cognitivos, intelectuales y emocionales**, guarda los
-resultados en un **Google Sheets vinculado** y genera un **informe extenso y
-personalizado** al finalizar.
+resultados en un **Google Sheets vinculado** y genera un **informe visual,
+personalizado y descargable en PDF** al finalizar.
+
+## Informe visual
+
+El informe final está pensado para entenderse de un vistazo y, si se quiere, en
+profundidad (divulgación progresiva):
+
+- **Arquetipo + titular** en lenguaje natural que resume quién eres.
+- **Tarjetas resumen** escaneables con lo esencial (rasgo dominante, CI, IE, estilo de decisión).
+- **Fortalezas y zonas de crecimiento** en lenguaje sencillo.
+- **Radar** (SVG animado) para personalidad (HEXACO) e inteligencia emocional (TEIQue).
+- **Curva de campana** que sitúa tu CI (g / Gf / Gc) de forma intuitiva.
+- **Espectro** para el estilo de decisión (impulsivo ↔ reflexivo).
+- **Detalle técnico** psicométrico desplegable bajo demanda.
+- **Descargar PDF** de un clic (cliente, vía `html2pdf.js`; captura fiel del informe).
 
 ## Marcos teóricos implementados
 
@@ -84,5 +98,5 @@ resumen sin pasar por la interfaz.
 ## Próximos pasos sugeridos
 
 - Ampliar el banco de ítems por faceta (subdominios HEXACO, narrow abilities CHC).
-- Refinar el diseño visual (esta versión prioriza la lógica).
 - Recalibrar parámetros con datos reales y añadir control de exposición de ítems.
+- Permitir compartir/enviar el PDF por correo desde la propia app.
