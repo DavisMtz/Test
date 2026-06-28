@@ -34,6 +34,27 @@
   };
   var MODULE_ORDER = ['personality','cognitive','emotional','stealth'];
 
+  // La interfaz indica, por tipo de respuesta, CÓMO contestar.
+  var TYPE_HINT = {
+    likert:        { ic:'⟷', label:'Indica tu nivel de acuerdo' },
+    mcq:           { ic:'◎', label:'Elige la respuesta correcta' },
+    sjt:           { ic:'★', label:'Elige la opción más eficaz' },
+    scenario:      { ic:'⚑', label:'Elige qué harías de verdad' },
+    forced_choice: { ic:'±', label:'Marca la más y la menos parecida' }
+  };
+  // Etiquetas de significado por punto de la escala Likert (clarifica la elección).
+  var LIKERT_LABELS = {
+    5:['Totalmente en desacuerdo','En desacuerdo','Neutral','De acuerdo','Totalmente de acuerdo'],
+    7:['Totalmente en desacuerdo','En desacuerdo','Algo en desacuerdo','Neutral','Algo de acuerdo','De acuerdo','Totalmente de acuerdo']
+  };
+  function likertLabel(item,val){
+    var arr=LIKERT_LABELS[item.scale];
+    if(arr && arr[val-1]) return arr[val-1];
+    var a=item.anchors||[]; return a[val-1] || ('Opción '+val);
+  }
+  // Aplica la identidad de color del módulo a toda la interfaz.
+  function setModule(m){ document.body.dataset.module = m || ''; }
+
   function $(id){ return document.getElementById(id); }
 
   /* ---------------- Animación (con degradado elegante) ---------------- */
@@ -61,6 +82,14 @@
     $('btn-next').addEventListener('click', next);
     $('btn-prev').addEventListener('click', prev);
     document.addEventListener('keydown', onKey);
+
+    // Cada chip de bienvenida luce el color de su módulo (refuerza la identidad).
+    Array.prototype.forEach.call(document.querySelectorAll('.chip[data-c]'), function(c){
+      var col = c.getAttribute('data-c');
+      c.style.borderColor = col;
+      c.style.background = 'color-mix(in srgb, '+col+' 14%, transparent)';
+      c.style.boxShadow = '0 0 0 1px color-mix(in srgb, '+col+' 22%, transparent) inset';
+    });
 
     if(GS){
       GS.to('.o1',{ x:50, y:40, duration:9, repeat:-1, yoyo:true, ease:'sine.inOut' });
@@ -115,6 +144,7 @@
 
   function showStage(module){
     var s = STAGES[module];
+    setModule(module);
     $('stage-icon').textContent = s.icon;
     $('stage-kicker').textContent = 'Etapa '+s.n+' de 4';
     $('stage-title').textContent = s.title;
@@ -129,6 +159,7 @@
   function showQuestion(){
     var item = STATE.queue[STATE.index];
     if(!item) return;
+    setModule(item.module);
     STATE.itemShownAt = Date.now();
 
     $('module-tag').textContent = MODULE_LABEL[item.module] || item.module;
@@ -140,10 +171,17 @@
     var card = $('question-card');
     card.innerHTML='';
     var t=item.type;
+
+    // Píldora adaptativa: comunica el tipo de respuesta que se espera.
+    var hint=TYPE_HINT[t];
+    if(hint){
+      var pill=document.createElement('div'); pill.className='q-type';
+      pill.innerHTML='<span class="qt-ic" aria-hidden="true">'+esc(hint.ic)+'</span><span>'+esc(hint.label)+'</span>';
+      card.appendChild(pill);
+    }
+
     if(t==='likert') renderLikert(card,item);
-    else if(t==='mcq') renderMcq(card,item,'Elige una opción.');
-    else if(t==='sjt') renderMcq(card,item,'Elige la opción MÁS acertada.');
-    else if(t==='scenario') renderMcq(card,item,'¿Qué harías? Elige con sinceridad.');
+    else if(t==='mcq' || t==='sjt' || t==='scenario') renderMcq(card,item);
     else if(t==='forced_choice') renderForcedChoice(card,item);
 
     gFrom('#question-card > *',{ y:18, opacity:0, duration:.42, stagger:.05, ease:'power3.out' });
@@ -184,7 +222,7 @@
   function renderLikert(card,item){
     header(card,item);
     var wrap=document.createElement('div'); wrap.className='likert-wrap';
-    var row=document.createElement('div'); row.className='likert';
+    var row=document.createElement('div'); row.className='likert'; row.setAttribute('role','radiogroup');
     var current=STATE.responses[item.id];
     for(var v=1; v<=item.scale; v++){
       (function(val){
@@ -196,27 +234,36 @@
         b.style.borderColor=color;
         b.style.color = current===val ? '#08111f' : color;
         if(current===val) b.style.background=color;
-        b.setAttribute('aria-label','Opción '+val);
+        b.setAttribute('role','radio');
+        b.setAttribute('aria-checked', current===val ? 'true':'false');
+        b.setAttribute('aria-label', val+' — '+likertLabel(item,val));
         b.onclick=function(){ choose(item.id,val); };
         row.appendChild(b);
       })(v);
     }
     wrap.appendChild(row);
+    // Etiqueta viva con el significado de la opción seleccionada.
+    var live=document.createElement('div'); live.className='likert-value'; live.setAttribute('aria-live','polite');
+    if(current){ live.textContent=likertLabel(item,current); live.style.color='hsl('+((current-1)/(item.scale-1)*128)+',72%,62%)'; }
+    else { live.textContent='Toca un número para responder'; }
+    wrap.appendChild(live);
     var a=item.anchors||[];
     var anchors=document.createElement('div'); anchors.className='likert-anchors';
-    anchors.innerHTML='<span>'+esc(a[0]||'En desacuerdo')+'</span><span>'+esc(a[a.length-1]||'De acuerdo')+'</span>';
+    anchors.innerHTML='<span>'+esc(a[0]||likertLabel(item,1))+'</span><span>'+esc(a[a.length-1]||likertLabel(item,item.scale))+'</span>';
     wrap.appendChild(anchors);
     card.appendChild(wrap);
   }
 
-  function renderMcq(card,item,sub){
-    header(card,item,sub);
-    var wrap=document.createElement('div'); wrap.className='options';
+  function renderMcq(card,item){
+    header(card,item);
+    var wrap=document.createElement('div'); wrap.className='options'; wrap.setAttribute('role','radiogroup');
     var current=STATE.responses[item.id];
     var letters='ABCDEFGH';
     item.options.forEach(function(opt,i){
       var b=document.createElement('button');
       b.className='opt'+(current===i?' selected':'');
+      b.setAttribute('role','radio');
+      b.setAttribute('aria-checked', current===i ? 'true':'false');
       b.innerHTML='<span class="key">'+letters[i]+'</span><span>'+esc(opt.text)+'</span>';
       b.onclick=function(){ choose(item.id,i); };
       wrap.appendChild(b);
@@ -269,12 +316,19 @@
         var val=idx+1, hue=(val-1)/(item.scale-1)*128, color='hsl('+hue+',72%,55%)';
         var on=(val===value);
         b.classList.toggle('selected',on);
+        b.setAttribute('aria-checked', on ? 'true':'false');
         b.style.background=on?color:'';
         b.style.color=on?'#08111f':color;
       });
+      var live=card.querySelector('.likert-value');
+      if(live){ live.textContent=likertLabel(item,value); live.style.color='hsl('+((value-1)/(item.scale-1)*128)+',72%,62%)'; }
     } else {
       var opts=card.querySelectorAll('.opt');
-      opts.forEach(function(b,idx){ b.classList.toggle('selected', idx===value); });
+      opts.forEach(function(b,idx){
+        var on=(idx===value);
+        b.classList.toggle('selected', on);
+        b.setAttribute('aria-checked', on ? 'true':'false');
+      });
     }
   }
 
@@ -340,6 +394,7 @@
 
   /* ----------------------------- Informe ---------------------------- */
   function renderReport(res){
+    setModule(''); // el informe combina los colores de todos los módulos
     var r=res.report, m=r.metrics||{}, root=$('report-root');
     root.innerHTML='';
 
