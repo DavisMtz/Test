@@ -1,0 +1,309 @@
+<script>
+/* Cliente del test. Orquesta el wizard, captura respuestas y tiempos de
+   respuesta (evidencia de proceso), y envía todo al servidor para puntuar. */
+(function () {
+  'use strict';
+
+  var STATE = {
+    instrument: null,
+    queue: [],          // lista plana de ítems a presentar
+    index: 0,
+    responses: {},      // itemId -> valor
+    rt: {},             // itemId -> ms
+    itemShownAt: 0,
+    participant: {},
+    startedAt: 0
+  };
+
+  var MODULE_LABEL = {
+    personality: 'Cómo eres · Personalidad',
+    cognitive:   'Cómo piensas · Cognición',
+    emotional:   'Cómo sientes · Emoción',
+    stealth:     'Cómo decides · Decisión'
+  };
+
+  function $(id) { return document.getElementById(id); }
+  function show(screen) {
+    ['welcome', 'test', 'loading', 'report'].forEach(function (s) {
+      $('screen-' + s).classList.toggle('active', s === screen);
+    });
+    window.scrollTo(0, 0);
+  }
+
+  /* ---------------------------------------------------------- Arranque */
+  document.addEventListener('DOMContentLoaded', function () {
+    $('btn-start').addEventListener('click', startTest);
+    $('btn-next').addEventListener('click', next);
+    $('btn-prev').addEventListener('click', prev);
+    google.script.run.withSuccessHandler(function (inst) {
+      STATE.instrument = inst;
+    }).withFailureHandler(function (e) {
+      alert('No se pudo cargar el instrumento: ' + e);
+    }).getInstrumentForClient();
+  });
+
+  function startTest() {
+    if (!STATE.instrument) { alert('Aún cargando, intenta de nuevo en un momento.'); return; }
+    STATE.participant = {
+      name: ($('in-name').value || '').trim() || 'Participante',
+      age: $('in-age').value || '',
+      gender: $('in-gender').value || ''
+    };
+    // Orden por módulos para una experiencia coherente.
+    var order = ['personality', 'cognitive', 'emotional', 'stealth'];
+    STATE.queue = STATE.instrument.items.slice().sort(function (a, b) {
+      return order.indexOf(a.module) - order.indexOf(b.module);
+    });
+    STATE.index = 0;
+    STATE.startedAt = Date.now();
+    show('test');
+    render();
+  }
+
+  /* ---------------------------------------------------------- Render */
+  function render() {
+    var item = STATE.queue[STATE.index];
+    if (!item) return;
+    STATE.itemShownAt = Date.now();
+
+    $('module-tag').textContent = MODULE_LABEL[item.module] || item.module;
+    $('counter').textContent = (STATE.index + 1) + ' / ' + STATE.queue.length;
+    $('progress-bar').style.width = ((STATE.index) / STATE.queue.length * 100) + '%';
+    $('btn-prev').disabled = STATE.index === 0;
+    $('btn-next').textContent = (STATE.index === STATE.queue.length - 1) ? 'Finalizar' : 'Siguiente';
+
+    var card = $('question-card');
+    card.innerHTML = '';
+    var type = item.type;
+    if (type === 'likert') renderLikert(card, item);
+    else if (type === 'mcq') renderMcq(card, item);
+    else if (type === 'forced_choice') renderForcedChoice(card, item);
+    else if (type === 'sjt') renderMcq(card, item, 'Elige la opción MÁS eficaz / acertada.');
+    else if (type === 'scenario') renderMcq(card, item, '¿Qué harías? Elige con sinceridad.');
+  }
+
+  function header(card, item, sub) {
+    var h = document.createElement('div');
+    h.className = 'q-text';
+    h.textContent = item.text || item.prompt || '';
+    card.appendChild(h);
+    if (sub) {
+      var s = document.createElement('div');
+      s.className = 'q-sub';
+      s.textContent = sub;
+      card.appendChild(s);
+    }
+  }
+
+  function renderLikert(card, item) {
+    var seven = item.scale === 7;
+    header(card, item);
+    var wrap = document.createElement('div');
+    wrap.className = 'likert' + (seven ? ' seven' : '');
+    var current = STATE.responses[item.id];
+    for (var v = 1; v <= item.scale; v++) {
+      (function (val) {
+        var b = document.createElement('button');
+        b.className = 'opt' + (current === val ? ' selected' : '');
+        b.textContent = val;
+        b.style.fontWeight = '700';
+        b.onclick = function () { choose(item.id, val); };
+        wrap.appendChild(b);
+      })(v);
+    }
+    card.appendChild(wrap);
+    var anchors = document.createElement('div');
+    anchors.className = 'likert-anchors';
+    var a = item.anchors || [];
+    anchors.innerHTML = '<span>' + (a[0] || 'En desacuerdo') + '</span><span>' +
+      (a[a.length - 1] || 'De acuerdo') + '</span>';
+    card.appendChild(anchors);
+  }
+
+  function renderMcq(card, item, sub) {
+    header(card, item, sub);
+    var wrap = document.createElement('div');
+    wrap.className = 'options';
+    var current = STATE.responses[item.id];
+    item.options.forEach(function (opt, i) {
+      var b = document.createElement('button');
+      b.className = 'opt' + (current === i ? ' selected' : '');
+      b.textContent = opt.text;
+      b.onclick = function () { choose(item.id, i); };
+      wrap.appendChild(b);
+    });
+    card.appendChild(wrap);
+  }
+
+  function renderForcedChoice(card, item) {
+    header(card, item);
+    var hint = document.createElement('div');
+    hint.className = 'fc-hint';
+    hint.textContent = 'Marca M (más parecida a ti) y m (menos parecida). Deben ser distintas.';
+    card.appendChild(hint);
+
+    var resp = STATE.responses[item.id] || { most: null, least: null };
+    var wrap = document.createElement('div');
+    wrap.className = 'options';
+    item.options.forEach(function (opt, i) {
+      var row = document.createElement('div');
+      row.className = 'fc-row';
+      var pick = document.createElement('div');
+      pick.className = 'fc-pick';
+      var mostBtn = document.createElement('button');
+      mostBtn.textContent = 'M';
+      mostBtn.className = resp.most === i ? 'on-most' : '';
+      mostBtn.onclick = function () {
+        resp.most = (resp.most === i ? null : i);
+        if (resp.least === i) resp.least = null;
+        STATE.responses[item.id] = resp; render();
+      };
+      var leastBtn = document.createElement('button');
+      leastBtn.textContent = 'm';
+      leastBtn.className = resp.least === i ? 'on-least' : '';
+      leastBtn.onclick = function () {
+        resp.least = (resp.least === i ? null : i);
+        if (resp.most === i) resp.most = null;
+        STATE.responses[item.id] = resp; render();
+      };
+      pick.appendChild(mostBtn); pick.appendChild(leastBtn);
+      var st = document.createElement('div');
+      st.className = 'fc-statement';
+      st.textContent = opt.text;
+      row.appendChild(pick); row.appendChild(st);
+      wrap.appendChild(row);
+    });
+    card.appendChild(wrap);
+  }
+
+  /* ---------------------------------------------------------- Interacción */
+  function choose(itemId, value) {
+    STATE.responses[itemId] = value;
+    recordRt(itemId);
+    // Avance automático para ítems de selección única (mejor ritmo).
+    var item = STATE.queue[STATE.index];
+    if (item.type !== 'forced_choice') {
+      setTimeout(next, 180);
+    } else {
+      render();
+    }
+  }
+
+  function recordRt(itemId) {
+    if (STATE.itemShownAt) {
+      var dt = Date.now() - STATE.itemShownAt;
+      // Acumula si el ítem se revisita; conserva el primer tiempo de decisión.
+      if (STATE.rt[itemId] == null) STATE.rt[itemId] = dt;
+    }
+  }
+
+  function isAnswered(item) {
+    var r = STATE.responses[item.id];
+    if (item.type === 'forced_choice') return r && r.most != null && r.least != null;
+    return r != null;
+  }
+
+  function next() {
+    var item = STATE.queue[STATE.index];
+    if (!isAnswered(item)) {
+      flashRequired();
+      return;
+    }
+    recordRt(item.id);
+    if (STATE.index < STATE.queue.length - 1) {
+      STATE.index++;
+      render();
+    } else {
+      submit();
+    }
+  }
+
+  function prev() {
+    if (STATE.index > 0) { STATE.index--; render(); }
+  }
+
+  function flashRequired() {
+    var card = $('question-card');
+    card.style.outline = '2px solid #ff7a7a';
+    setTimeout(function () { card.style.outline = 'none'; }, 500);
+  }
+
+  /* ---------------------------------------------------------- Envío */
+  function submit() {
+    show('loading');
+    var payload = {
+      participant: STATE.participant,
+      responses: STATE.responses,
+      meta: { rt: STATE.rt, durationMs: Date.now() - STATE.startedAt }
+    };
+    google.script.run
+      .withSuccessHandler(onResult)
+      .withFailureHandler(function (e) {
+        show('test');
+        alert('Error al procesar: ' + e);
+      })
+      .submitAssessment(payload);
+  }
+
+  function onResult(res) {
+    if (!res || !res.ok) {
+      show('test');
+      alert('No se pudo generar el informe: ' + (res && res.error));
+      return;
+    }
+    renderReport(res);
+    show('report');
+  }
+
+  /* ---------------------------------------------------------- Informe */
+  function renderReport(res) {
+    var r = res.report;
+    var root = $('report-root');
+    root.innerHTML = '';
+
+    var head = document.createElement('div');
+    head.className = 'card';
+    head.innerHTML = '<h1>' + esc(r.title) + '</h1><p class="lead">' + esc(r.intro) + '</p>';
+
+    var badges = document.createElement('div');
+    badges.className = 'badges';
+    var s = res.summary;
+    badges.innerHTML =
+      badge('g (CI) ' + s.g_iq) + badge('Gf ' + s.gf_iq) + badge('Gc ' + s.gc_iq) +
+      badge('EI rasgo P' + s.ei_trait_pct) +
+      (s.ei_ability_100 != null ? badge('EI habilidad ' + s.ei_ability_100 + '/100') : '');
+    head.appendChild(badges);
+    root.appendChild(head);
+
+    r.sections.forEach(function (sec) {
+      var c = document.createElement('div');
+      c.className = 'card report-section';
+      var html = '<h3>' + esc(sec.title) + '</h3>';
+      if (sec.intro) html += '<p class="muted">' + esc(sec.intro) + '</p>';
+      (sec.bullets || []).forEach(function (b) {
+        html += '<div class="bullet"><h4>' + esc(b.heading) + '</h4><p>' + esc(b.body) + '</p></div>';
+      });
+      if (sec.interplay && sec.interplay.length) {
+        html += '<div class="interplay">';
+        sec.interplay.forEach(function (p) { html += '<p>• ' + esc(p) + '</p>'; });
+        html += '</div>';
+      }
+      c.innerHTML = html;
+      root.appendChild(c);
+    });
+
+    var foot = document.createElement('div');
+    foot.className = 'card';
+    foot.innerHTML = '<p class="disclaimer">' + esc(r.disclaimer) + '</p>' +
+      (res.spreadsheetUrl ? '<p class="small muted">Registro guardado (ID ' + esc(res.recordId) + ').</p>' : '') +
+      '<button class="primary" onclick="window.scrollTo(0,0)">Volver arriba</button>';
+    root.appendChild(foot);
+  }
+
+  function badge(t) { return '<span class="badge">' + esc(t) + '</span>'; }
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+})();
+</script>
