@@ -3,24 +3,36 @@
 <head>
   <base target="_top">
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <?!= include('Styles'); ?>
 </head>
 <body>
-  <div id="app">
-    <!-- Pantalla: bienvenida -->
+  <!-- Fondo animado -->
+  <div class="bg-orbs" aria-hidden="true">
+    <span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span>
+  </div>
+
+  <main id="app">
+    <!-- ============ BIENVENIDA ============ -->
     <section id="screen-welcome" class="screen active">
-      <div class="card">
-        <h1>Evaluación de Perfil Integral</h1>
-        <p class="lead">Un recorrido interactivo por cómo <strong>eres</strong>, cómo <strong>piensas</strong>,
-          cómo <strong>sientes</strong> y cómo <strong>decides</strong>.</p>
-        <ul class="frameworks">
-          <li><b>Personalidad:</b> HEXACO / Big Five (IPIP)</li>
-          <li><b>Cognición:</b> CHC — inteligencia fluida y cristalizada (TRI/IRT)</li>
-          <li><b>Emoción:</b> TEIQue (rasgo) y MSCEIT (habilidad)</li>
-          <li><b>Decisión:</b> retos situacionales (evaluación sigilosa)</li>
-        </ul>
+      <div class="card hero">
+        <div class="kicker">Evaluación psicométrica interactiva</div>
+        <h1 class="title">Descubre tu <span class="grad">Perfil Integral</span></h1>
+        <p class="lead">Un recorrido por cómo <b>eres</b>, cómo <b>piensas</b>, cómo <b>sientes</b>
+          y cómo <b>decides</b>. Cuatro etapas, varios retos, un informe hecho a tu medida.</p>
+
+        <div class="chips">
+          <span class="chip" data-c="#5b8cff">🧭 HEXACO · Big Five</span>
+          <span class="chip" data-c="#33d6a6">🧠 CHC · Gf / Gc · IRT</span>
+          <span class="chip" data-c="#ff7ab8">💗 TEIQue · MSCEIT</span>
+          <span class="chip" data-c="#ffb648">🎮 Evaluación sigilosa</span>
+        </div>
+
         <div class="form-grid">
-          <label>Nombre <input id="in-name" type="text" placeholder="Tu nombre"></label>
+          <label>Nombre <input id="in-name" type="text" placeholder="¿Cómo te llamas?" autocomplete="given-name"></label>
           <label>Edad <input id="in-age" type="number" min="10" max="120" placeholder="Edad"></label>
           <label>Género
             <select id="in-gender">
@@ -29,38 +41,59 @@
             </select>
           </label>
         </div>
-        <button id="btn-start" class="primary">Comenzar</button>
-        <p class="muted small">Tiempo estimado: 8-12 min. Tus respuestas se guardan de forma anónima para fines de demostración.</p>
+
+        <button id="btn-start" class="primary big">Comenzar mi viaje →</button>
+        <p class="muted small center">⏱️ 8–12 min · Tus respuestas se guardan de forma anónima.</p>
       </div>
     </section>
 
-    <!-- Pantalla: test -->
+    <!-- ============ ETAPA (interstitial) ============ -->
+    <section id="screen-stage" class="screen">
+      <div class="card stage center">
+        <div class="stage-icon" id="stage-icon">🧭</div>
+        <div class="stage-kicker" id="stage-kicker">Etapa 1 de 4</div>
+        <h2 class="stage-title" id="stage-title">Cómo eres</h2>
+        <p class="stage-sub" id="stage-sub"></p>
+        <button id="btn-stage" class="primary big">Empezar reto</button>
+        <p class="muted small">Pista: puedes usar el teclado (1–5 o A–D) y Enter para avanzar.</p>
+      </div>
+    </section>
+
+    <!-- ============ TEST ============ -->
     <section id="screen-test" class="screen">
-      <div class="progress"><div id="progress-bar"></div></div>
-      <div class="module-tag" id="module-tag"></div>
-      <div class="card" id="question-card"><!-- inyectado por JS --></div>
+      <header class="test-top">
+        <div class="seg" id="segments"></div>
+        <div class="progress"><div id="progress-bar"></div></div>
+        <div class="test-meta">
+          <span class="module-tag" id="module-tag"></span>
+          <span class="counter muted" id="counter"></span>
+        </div>
+      </header>
+
+      <div class="card q-card" id="question-card"><!-- inyectado --></div>
+
       <div class="nav">
-        <button id="btn-prev" class="ghost">Anterior</button>
-        <span id="counter" class="muted"></span>
-        <button id="btn-next" class="primary">Siguiente</button>
+        <button id="btn-prev" class="ghost">← Anterior</button>
+        <button id="btn-next" class="primary">Siguiente →</button>
       </div>
     </section>
 
-    <!-- Pantalla: cargando -->
+    <!-- ============ CARGANDO ============ -->
     <section id="screen-loading" class="screen">
-      <div class="card center">
-        <div class="spinner"></div>
+      <div class="card center loading">
+        <div class="loader"><span></span><span></span><span></span><span></span></div>
         <h2>Analizando tu perfil…</h2>
-        <p class="muted">Calculando puntuaciones psicométricas y generando tu informe.</p>
+        <p class="muted">Calculando puntuaciones psicométricas y redactando tu informe.</p>
       </div>
     </section>
 
-    <!-- Pantalla: resultados -->
+    <!-- ============ INFORME ============ -->
     <section id="screen-report" class="screen">
-      <div id="report-root"><!-- inyectado por JS --></div>
+      <div id="report-root"><!-- inyectado --></div>
     </section>
-  </div>
+  </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
   <?!= include('Client'); ?>
 </body>
 </html>
