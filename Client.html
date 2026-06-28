@@ -246,9 +246,15 @@
   }
 
   function onResult(res) {
-    if (!res || !res.ok) {
+    if (res == null) {
       show('test');
-      alert('No se pudo generar el informe: ' + (res && res.error));
+      alert('El servidor no devolvió respuesta. Vuelve a intentar Finalizar; ' +
+            'si persiste, recarga la página. (Tus datos pudieron guardarse igualmente.)');
+      return;
+    }
+    if (!res.ok) {
+      show('test');
+      alert('No se pudo generar el informe: ' + (res.error || 'error desconocido'));
       return;
     }
     renderReport(res);
