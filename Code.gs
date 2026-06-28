@@ -54,16 +54,30 @@ function submitAssessment(payload) {
     var ss = getSpreadsheet_();
     ensureStructure_(ss);
     var recordId = persistProfile_(ss, profile, payload);
-    return {
+    var out = {
       ok: true,
       recordId: recordId,
       report: report,
       summary: profile.summary,
       spreadsheetUrl: ss.getUrl()
     };
+    // El serializador de google.script.run es más estricto que JSON y puede
+    // devolver `null` al cliente si el objeto contiene Date anidados, NaN o
+    // Infinity. Forzamos un objeto 100% plano y JSON-seguro (Date -> ISO,
+    // NaN/Infinity -> null) para garantizar que el informe llegue siempre.
+    return jsonSafe_(out);
   } catch (err) {
-    return { ok: false, error: String(err && err.stack || err) };
+    Logger.log('submitAssessment ERROR: ' + (err && err.stack || err));
+    return { ok: false, error: String((err && err.stack) || err || 'Error desconocido') };
   }
+}
+
+/** Devuelve una copia JSON-segura (plana, sin Date/NaN/Infinity/undefined). */
+function jsonSafe_(obj) {
+  return JSON.parse(JSON.stringify(obj, function (key, value) {
+    if (typeof value === 'number' && !isFinite(value)) return null;
+    return value;
+  }));
 }
 
 /* ----------------------------------------------------- Gestión Spreadsheet */
