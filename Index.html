@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="app">
+    <!-- Pantalla: bienvenida -->
+    <section id="screen-welcome" class="screen active">
+      <div class="card">
+        <h1>Evaluación de Perfil Integral</h1>
+        <p class="lead">Un recorrido interactivo por cómo <strong>eres</strong>, cómo <strong>piensas</strong>,
+          cómo <strong>sientes</strong> y cómo <strong>decides</strong>.</p>
+        <ul class="frameworks">
+          <li><b>Personalidad:</b> HEXACO / Big Five (IPIP)</li>
+          <li><b>Cognición:</b> CHC — inteligencia fluida y cristalizada (TRI/IRT)</li>
+          <li><b>Emoción:</b> TEIQue (rasgo) y MSCEIT (habilidad)</li>
+          <li><b>Decisión:</b> retos situacionales (evaluación sigilosa)</li>
+        </ul>
+        <div class="form-grid">
+          <label>Nombre <input id="in-name" type="text" placeholder="Tu nombre"></label>
+          <label>Edad <input id="in-age" type="number" min="10" max="120" placeholder="Edad"></label>
+          <label>Género
+            <select id="in-gender">
+              <option value="">Prefiero no decir</option>
+              <option>Femenino</option><option>Masculino</option><option>No binario</option><option>Otro</option>
+            </select>
+          </label>
+        </div>
+        <button id="btn-start" class="primary">Comenzar</button>
+        <p class="muted small">Tiempo estimado: 8-12 min. Tus respuestas se guardan de forma anónima para fines de demostración.</p>
+      </div>
+    </section>
+
+    <!-- Pantalla: test -->
+    <section id="screen-test" class="screen">
+      <div class="progress"><div id="progress-bar"></div></div>
+      <div class="module-tag" id="module-tag"></div>
+      <div class="card" id="question-card"><!-- inyectado por JS --></div>
+      <div class="nav">
+        <button id="btn-prev" class="ghost">Anterior</button>
+        <span id="counter" class="muted"></span>
+        <button id="btn-next" class="primary">Siguiente</button>
+      </div>
+    </section>
+
+    <!-- Pantalla: cargando -->
+    <section id="screen-loading" class="screen">
+      <div class="card center">
+        <div class="spinner"></div>
+        <h2>Analizando tu perfil…</h2>
+        <p class="muted">Calculando puntuaciones psicométricas y generando tu informe.</p>
+      </div>
+    </section>
+
+    <!-- Pantalla: resultados -->
+    <section id="screen-report" class="screen">
+      <div id="report-root"><!-- inyectado por JS --></div>
+    </section>
+  </div>
+
+  <?!= include('Client'); ?>
+</body>
+</html>
