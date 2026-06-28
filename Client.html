@@ -392,141 +392,376 @@
     show('report');
   }
 
-  /* ----------------------------- Informe ---------------------------- */
+  /* =====================================================================
+     INFORME 2.0 — relato visual y escaneable.
+     Estructura: arquetipo + titular → snapshot → fortalezas/crecimiento →
+     personalidad (radar) → cognitivo (curva de campana) → emocional (radar)
+     → decisión (espectro) → lectura integrada → recomendaciones → PDF.
+     Lo visual y el "qué significa" siempre a la vista; el detalle técnico se
+     despliega bajo demanda. Exportación a PDF de un clic (html2pdf.js).
+     ===================================================================== */
+  var SVGNS='http://www.w3.org/2000/svg';
+  // Nombres cortos para los ejes del radar (los largos no caben bien).
+  var SHORT_TRAIT={ 'Honestidad-Humildad':'Honestidad', 'Emocionalidad':'Emocionalidad',
+    'Extraversión':'Extraversión', 'Amabilidad':'Amabilidad', 'Responsabilidad':'Responsab.', 'Apertura':'Apertura' };
+  function shortTrait(n){ return SHORT_TRAIT[n]||n; }
+  function cap(s){ return s?String(s).charAt(0).toUpperCase()+String(s).slice(1):s; }
+  function svg(name,attrs){ var e=document.createElementNS(SVGNS,name); for(var k in attrs) e.setAttribute(k,attrs[k]); return e; }
+
   function renderReport(res){
     setModule(''); // el informe combina los colores de todos los módulos
     var r=res.report, m=r.metrics||{}, root=$('report-root');
     root.innerHTML='';
 
-    // Hero + gauges
-    var hero=document.createElement('div'); hero.className='card report-hero';
-    hero.innerHTML='<div class="kicker">Tu informe</div><h1>'+esc(r.title)+'</h1>'+
-                   '<p class="lead">'+esc(r.intro)+'</p>';
-    var gauges=document.createElement('div'); gauges.className='gauges';
-    (m.cognitive||[]).forEach(function(c){
-      gauges.appendChild(makeGauge(c.percentile, '#'+'', c.color, String(c.iq), c.label.split('(')[0].trim(), 'CI · P'+c.percentile));
-    });
-    gauges.appendChild(makeGauge(m.eiTraitGlobal||0, '', '#ff7ab8', 'P'+(m.eiTraitGlobal||0), 'IE (rasgo)', 'TEIQue'));
-    if(m.eiAbilityGlobal!=null) gauges.appendChild(makeGauge(m.eiAbilityGlobal, '', '#ffb648', m.eiAbilityGlobal+'', 'IE (habilidad)', 'MSCEIT /100'));
-    hero.appendChild(gauges);
-    root.appendChild(hero);
+    root.appendChild(buildHero(r));
+    if(r.highlights) root.appendChild(buildHighlightsCard(r.highlights));
 
-    // Personalidad (barras HEXACO)
-    if(m.hexaco){
-      var pcard=document.createElement('div'); pcard.className='card';
-      pcard.innerHTML='<h3 style="color:#cfe0ff;margin-bottom:4px;">Tu personalidad (HEXACO / Big Five)</h3>'+
-                      '<p class="muted small" style="margin-bottom:14px;">Percentil respecto a la norma.</p>';
-      pcard.appendChild(makeBars(m.hexaco.map(function(h){
-        return { label:h.name, sub:(h.ocean?('≈ '+h.oceanName):'solo HEXACO'), value:h.percentile, lvl:h.level, color:h.color };
-      })));
-      root.appendChild(pcard);
-    }
+    var S={}; (r.sections||[]).forEach(function(sec){ S[sec.id]=sec; });
+    if(m.hexaco)    root.appendChild(buildPersonalityCard(S.personality, m));
+    if(m.cognitive) root.appendChild(buildCognitiveCard(S.cognitive, m));
+    if(m.eiTrait)   root.appendChild(buildEmotionalCard(S.emotional, m));
+    if(S.stealth)   root.appendChild(buildDecisionCard(S.stealth, m));
+    if(S.integrative)     root.appendChild(buildTextCard(S.integrative, '🧩', '#5b8cff'));
+    if(S.recommendations) root.appendChild(buildRecommendationsCard(S.recommendations));
+    root.appendChild(buildFooter(res, r));
 
-    // IE factores
-    if(m.eiTrait){
-      var ecard=document.createElement('div'); ecard.className='card';
-      ecard.innerHTML='<h3 style="color:#cfe0ff;margin-bottom:14px;">Inteligencia emocional · factores (TEIQue)</h3>';
-      ecard.appendChild(makeBars(m.eiTrait.map(function(f){
-        return { label:f.name, sub:'', value:f.percentile, lvl:f.level, color:'#ff7ab8' };
-      })));
-      root.appendChild(ecard);
-    }
-
-    // Badges resumen
-    var s=res.summary;
-    var bcard=document.createElement('div'); bcard.className='card';
-    var badges='<div class="badges">'+
-      badge('g · CI '+s.g_iq)+badge('Gf '+s.gf_iq,'alt')+badge('Gc '+s.gc_iq,'alt')+
-      badge('IE rasgo · P'+s.ei_trait_pct)+
-      (s.ei_ability_100!=null?badge('IE habilidad · '+s.ei_ability_100+'/100','alt'):'')+
-      (m.stealthStyle?badge('Estilo: '+m.stealthStyle):'')+'</div>';
-    bcard.innerHTML='<h3 style="color:#cfe0ff;">Resumen</h3>'+badges;
-    root.appendChild(bcard);
-
-    // Secciones textuales
-    (r.sections||[]).forEach(function(sec){
-      var c=document.createElement('div'); c.className='card report-section';
-      var html='<h3>'+esc(sec.title)+'</h3>';
-      if(sec.intro) html+='<p class="muted">'+esc(sec.intro)+'</p>';
-      (sec.bullets||[]).forEach(function(b){
-        html+='<div class="bullet"><h4>'+esc(b.heading)+'</h4><p>'+esc(b.body)+'</p></div>';
-      });
-      if(sec.interplay && sec.interplay.length){
-        html+='<div class="interplay">';
-        sec.interplay.forEach(function(p){ html+='<p>• '+esc(p)+'</p>'; });
-        html+='</div>';
-      }
-      c.innerHTML=html; root.appendChild(c);
-    });
-
-    // Pie
-    var foot=document.createElement('div'); foot.className='card';
-    foot.innerHTML='<p class="disclaimer">'+esc(r.disclaimer)+'</p>'+
-      (res.recordId?'<p class="small muted">Registro guardado (ID '+esc(res.recordId)+').</p>':'')+
-      '<button class="primary big" id="btn-top">↑ Volver arriba</button>';
-    root.appendChild(foot);
-    $('btn-top').onclick=function(){ window.scrollTo({top:0,behavior:'smooth'}); };
+    // Enlaces de acción
+    Array.prototype.forEach.call(document.querySelectorAll('.pdf-btn'), function(b){ b.onclick=downloadPdf; });
+    var rb=$('btn-restart'); if(rb) rb.onclick=function(){ location.reload(); };
+    var tb=$('btn-top');     if(tb) tb.onclick=function(){ window.scrollTo({top:0,behavior:'smooth'}); };
 
     animateReport(root);
   }
 
-  function makeGauge(pct, _u, color, big, cap, sub){
-    pct=Math.max(0,Math.min(100,pct||0));
-    var R=52, C=2*Math.PI*R, off=C*(1-pct/100);
-    var el=document.createElement('div'); el.className='gauge';
-    el.innerHTML=
-      '<svg viewBox="0 0 120 120">'+
-        '<circle class="ring-bg" cx="60" cy="60" r="'+R+'"></circle>'+
-        '<circle class="ring-fg" cx="60" cy="60" r="'+R+'" stroke="'+color+'" '+
-          'stroke-dasharray="'+C+'" stroke-dashoffset="'+C+'"></circle>'+
-        '<text class="g-num" x="60" y="66" text-anchor="middle" fill="#fff">0</text>'+
-      '</svg>'+
-      '<span class="g-cap">'+esc(cap)+'</span><span class="g-sub">'+esc(sub)+'</span>';
-    el._anim=function(){
-      var fg=el.querySelector('.ring-fg'), num=el.querySelector('.g-num');
-      if(GS) GS.to(fg,{ strokeDashoffset:off, duration:1.4, ease:'power3.out' });
-      else fg.setAttribute('stroke-dashoffset', off);
-      // número: si es "P##" o numérico, animar la parte numérica
-      var prefix = /^[A-Za-z]+/.exec(big); prefix=prefix?prefix[0]:'';
-      var target = parseInt(big.replace(/[^0-9]/g,''),10);
-      if(isNaN(target)){ num.textContent=big; return; }
-      countUp(num, target, function(n){ return prefix+n; });
-    };
+  /* ----------------------------- Hero ----------------------------- */
+  function buildHero(r){
+    var a=r.archetype||{}, card=document.createElement('div'); card.className='card report-hero';
+    card.style.setProperty('--sec','#9a6bff');
+    var tiles=(r.snapshot||[]).map(snapTile).join('');
+    card.innerHTML=
+      '<div class="hero-top no-pdf">'+
+        '<span class="kicker">Tu informe · listo ✓</span>'+
+        '<button class="pdf-btn" type="button">📄 Descargar PDF</button>'+
+      '</div>'+
+      '<div class="archetype">'+
+        '<div class="arch-emoji">'+esc(a.emoji||'🧠')+'</div>'+
+        '<div class="arch-meta">'+
+          '<div class="arch-klabel">Tu arquetipo</div>'+
+          '<h1 class="arch-name">'+esc(a.name||r.title||'Tu perfil')+'</h1>'+
+          (a.tagline?'<div class="arch-tagline">'+esc(a.tagline)+'</div>':'')+
+        '</div>'+
+      '</div>'+
+      (a.blurb?'<p class="arch-blurb">'+esc(a.blurb)+'</p>':'')+
+      (r.headline?'<p class="lead">'+esc(r.headline)+'</p>':'')+
+      (tiles?'<div class="snapshot">'+tiles+'</div>':'');
+    return card;
+  }
+  function snapTile(t){
+    return '<div class="snap-tile" style="--sec:'+(t.color||'#5b8cff')+'">'+
+      '<div class="snap-ic">'+esc(t.icon||'•')+'</div>'+
+      '<div class="snap-val">'+esc(t.value)+'</div>'+
+      '<div class="snap-label">'+esc(t.label)+'</div>'+
+      (t.caption?'<div class="snap-cap">'+esc(t.caption)+'</div>':'')+
+    '</div>';
+  }
+
+  /* ----------------- Fortalezas / crecimiento --------------------- */
+  function buildHighlightsCard(h){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec','#33d6a6');
+    card.appendChild(secHeadEl('⭐','Lo esencial de ti',
+      'Tus mayores fortalezas y las zonas con más margen de crecimiento.','#33d6a6'));
+    var grid=document.createElement('div'); grid.className='insight-grid';
+    (h.strengths||[]).forEach(function(s){ grid.appendChild(insightCard(s,'strength')); });
+    (h.growth||[]).forEach(function(s){ grid.appendChild(insightCard(s,'grow')); });
+    card.appendChild(grid);
+    return card;
+  }
+  function insightCard(s,kind){
+    var el=document.createElement('div'); el.className='insight-card '+kind;
+    el.innerHTML='<div class="ins-top"><span class="ins-ic">'+esc(s.icon||'')+'</span><b>'+esc(s.title)+'</b>'+
+      (s.sub?'<span class="ins-sub">'+esc(s.sub)+'</span>':'')+'</div>'+
+      '<p>'+esc(s.text||'')+'</p>';
     return el;
   }
 
-  function makeBars(rows){
+  /* ----------------------- Personalidad --------------------------- */
+  function buildPersonalityCard(sec, m){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec','#7c9cff');
+    card.appendChild(secHeadEl('🧭', sec?sec.title:'Cómo eres', sec?sec.intro:'', '#7c9cff'));
+    card.appendChild(makeRadar(m.hexaco.map(function(h){
+      return { label:shortTrait(h.name), value:h.percentile, color:h.color };
+    }), '#7c9cff'));
+    var chips=document.createElement('div'); chips.className='lvl-chips';
+    m.hexaco.forEach(function(h){ chips.appendChild(chipEl(h.name, h.level, h.percentile, h.color)); });
+    card.appendChild(chips);
+    appendInterplay(card, sec, 'Cómo se combinan tus rasgos');
+    appendDetail(card, sec);
+    return card;
+  }
+
+  /* ------------------------- Cognitivo ---------------------------- */
+  function buildCognitiveCard(sec, m){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec','#33d6a6');
+    card.appendChild(secHeadEl('🧠', sec?sec.title:'Cómo piensas', sec?sec.intro:'', '#33d6a6'));
+    card.appendChild(makeBellCurve(m.cognitive));
+    var stats=document.createElement('div'); stats.className='stat-row';
+    m.cognitive.forEach(function(c){ stats.appendChild(statChip(c)); });
+    card.appendChild(stats);
+    appendInterplay(card, sec, 'Cómo leer tu perfil cognitivo');
+    appendDetail(card, sec);
+    return card;
+  }
+  function statChip(c){
+    var el=document.createElement('div'); el.className='stat-chip'; el.style.setProperty('--c',c.color||'#33d6a6');
+    el.innerHTML='<div class="st-key">'+esc(c.label.replace(/\s*\([^)]*\)/,''))+'</div>'+
+      '<div class="st-val">'+esc(String(c.iq))+'</div>'+
+      '<div class="st-sub">CI · P'+c.percentile+' · '+esc(c.level)+'</div>';
+    return el;
+  }
+
+  /* -------------------------- Emocional --------------------------- */
+  function buildEmotionalCard(sec, m){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec','#ff7ab8');
+    card.appendChild(secHeadEl('💗', sec?sec.title:'Cómo sientes', sec?sec.intro:'', '#ff7ab8'));
+    card.appendChild(makeRadar(m.eiTrait.map(function(f){
+      return { label:f.name, value:f.percentile, color:'#ff7ab8' };
+    }), '#ff7ab8'));
+    var chips=document.createElement('div'); chips.className='lvl-chips';
+    m.eiTrait.forEach(function(f){ chips.appendChild(chipEl(f.name, f.level, f.percentile, '#ff7ab8')); });
+    card.appendChild(chips);
+    if(m.eiAbility && m.eiAbility.length){
+      var ab=document.createElement('div'); ab.className='takeaways';
+      ab.innerHTML='<div class="ta-title">Habilidad emocional en práctica (MSCEIT'+
+        (m.eiAbilityGlobal!=null?' · '+m.eiAbilityGlobal+'/100':'')+')</div>';
+      ab.appendChild(makeBars(m.eiAbility.map(function(b){
+        return { label:b.name, value:b.score100, color:'#ff7ab8' };
+      }), true));
+      card.appendChild(ab);
+    }
+    appendInterplay(card, sec, 'Autopercepción frente a desempeño real');
+    appendDetail(card, sec);
+    return card;
+  }
+
+  /* --------------------------- Decisión --------------------------- */
+  function buildDecisionCard(sec, m){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec','#ffb648');
+    card.appendChild(secHeadEl('🎮', sec?sec.title:'Cómo decides', sec?sec.intro:'', '#ffb648'));
+    var dec=m.decision||{};
+    card.appendChild(makeSpectrum(dec.style, dec.avgMs));
+    appendInterplay(card, sec, 'Señales que dejaron tus decisiones');
+    appendDetail(card, sec);
+    return card;
+  }
+  function makeSpectrum(style, avgMs){
+    var wrap=document.createElement('div'); wrap.className='spectrum';
+    var pos = style==='impulsivo'?16:(style==='reflexivo'?84:50);
+    if(avgMs){ var p=(avgMs-1500)/(12000-1500); pos=Math.round(Math.max(0.06,Math.min(0.94,p))*100); }
+    wrap.innerHTML=
+      '<div class="spec-labels"><span>⚡ Impulsivo</span><span>⚖️ Equilibrado</span><span>🧩 Reflexivo</span></div>'+
+      '<div class="spec-track"><div class="spec-fill" style="width:'+pos+'%"></div>'+
+        '<div class="spec-marker" style="left:'+pos+'%"><span>'+esc(cap(style||'—'))+'</span></div></div>'+
+      (avgMs?'<div class="spec-cap">Tiempo medio por reto ≈ '+Math.round(avgMs/1000)+' s</div>':'');
+    return wrap;
+  }
+
+  /* --------------- Tarjetas de texto / recomendaciones ------------ */
+  function buildTextCard(sec, icon, color){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec',color);
+    card.appendChild(secHeadEl(icon, sec.title, sec.intro, color));
+    appendInterplay(card, sec, null);
+    appendDetail(card, sec);
+    return card;
+  }
+  function buildRecommendationsCard(sec){
+    var card=document.createElement('div'); card.className='card'; card.style.setProperty('--sec','#9a6bff');
+    card.appendChild(secHeadEl('🎯', sec.title, sec.intro, '#9a6bff'));
+    var list=document.createElement('div'); list.className='reco-list';
+    (sec.interplay||[]).forEach(function(p){
+      var d=document.createElement('div'); d.className='reco';
+      d.innerHTML='<span class="reco-ic">✓</span><p>'+esc(p)+'</p>'; list.appendChild(d);
+    });
+    card.appendChild(list);
+    return card;
+  }
+
+  /* ----------------------------- Pie ------------------------------ */
+  function buildFooter(res, r){
+    var card=document.createElement('div'); card.className='card report-foot';
+    card.innerHTML=
+      '<div class="foot-cta no-pdf">'+
+        '<button class="pdf-btn big" type="button">📄 Descargar informe en PDF</button>'+
+        '<button class="ghost" id="btn-restart" type="button">↺ Hacer de nuevo</button>'+
+        '<button class="ghost" id="btn-top" type="button">↑ Arriba</button>'+
+      '</div>'+
+      '<p class="disclaimer">'+esc(r.disclaimer)+'</p>'+
+      (res.recordId?'<p class="small muted">Registro guardado de forma anónima (ID '+esc(res.recordId)+').</p>':'');
+    return card;
+  }
+
+  /* ----------------------- Bloques reutilizables ------------------ */
+  function secHeadEl(icon, title, sub, color){
+    var h=document.createElement('div'); h.className='sec-head'; if(color) h.style.setProperty('--sec',color);
+    h.innerHTML='<div class="sec-ic">'+esc(icon)+'</div><div><h3>'+esc(title||'')+'</h3>'+
+      (sub?'<p class="sec-sub">'+esc(sub)+'</p>':'')+'</div>';
+    return h;
+  }
+  function chipEl(name, level, v, color){
+    var c=document.createElement('div'); c.className='lvl-chip'; c.style.setProperty('--c',color||'#5b8cff');
+    c.innerHTML='<span class="lc-dot"></span><b>'+esc(name)+'</b><span class="lc-meta">'+esc(level)+' · P'+v+'</span>';
+    return c;
+  }
+  function appendInterplay(card, sec, title){
+    if(!sec || !sec.interplay || !sec.interplay.length) return;
+    var box=document.createElement('div'); box.className='takeaways';
+    if(title) box.innerHTML='<div class="ta-title">'+esc(title)+'</div>';
+    sec.interplay.forEach(function(p){
+      var d=document.createElement('div'); d.className='takeaway';
+      d.innerHTML='<span class="ta-ic">💡</span><p>'+esc(p)+'</p>'; box.appendChild(d);
+    });
+    card.appendChild(box);
+  }
+  function appendDetail(card, sec){
+    if(!sec || !sec.bullets || !sec.bullets.length) return;
+    var box=document.createElement('div'); box.className='detail';
+    var head=document.createElement('button'); head.className='detail-toggle'; head.type='button';
+    head.innerHTML='<span>Ver el detalle técnico</span><span class="dt-ic">⌄</span>';
+    var body=document.createElement('div'); body.className='detail-body';
+    sec.bullets.forEach(function(b){
+      var d=document.createElement('div'); d.className='bullet';
+      d.innerHTML='<h4>'+esc(b.heading)+'</h4><p>'+esc(b.body)+'</p>'; body.appendChild(d);
+    });
+    head.onclick=function(){ box.classList.toggle('open'); };
+    box.appendChild(head); box.appendChild(body); card.appendChild(box);
+  }
+
+  /* --------------------------- Radar (SVG) ------------------------ */
+  function makeRadar(axes, color){
+    var N=axes.length, W=340, H=300, cx=W/2, cy=H/2+4, R=92;
+    var el=svg('svg',{ viewBox:'0 0 '+W+' '+H, 'class':'radar' });
+    function pt(i,rad){ var ang=-Math.PI/2 + i*2*Math.PI/N; return [cx+Math.cos(ang)*rad, cy+Math.sin(ang)*rad]; }
+    function poly(rad){ var d=''; for(var i=0;i<N;i++){ var p=pt(i,rad); d+=(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1); } return d+'Z'; }
+    [0.25,0.5,0.75,1].forEach(function(rr){ el.appendChild(svg('path',{ d:poly(R*rr), 'class':'radar-ring' })); });
+    axes.forEach(function(ax,i){
+      var p=pt(i,R);
+      el.appendChild(svg('line',{ x1:cx, y1:cy, x2:p[0], y2:p[1], 'class':'radar-axis' }));
+      var lp=pt(i,R+22);
+      var anchor = Math.abs(lp[0]-cx)<8 ? 'middle' : (lp[0]>cx?'start':'end');
+      var t=svg('text',{ x:lp[0], y:lp[1], 'class':'radar-label', 'text-anchor':anchor, 'dominant-baseline':'middle' });
+      var n1=svg('tspan',{ x:lp[0] }); n1.textContent=ax.label; t.appendChild(n1);
+      var n2=svg('tspan',{ x:lp[0], dy:'1.15em', 'class':'radar-pct' }); n2.textContent='P'+Math.round(ax.value||0); t.appendChild(n2);
+      el.appendChild(t);
+    });
+    function dataR(v){ return R*Math.max(0.04,Math.min(1,(v||0)/100)); }
+    var area=svg('path',{ d:'', 'class':'radar-area', fill:color, stroke:color });
+    var d=''; axes.forEach(function(ax,i){ var p=pt(i,dataR(ax.value)); d+=(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1); });
+    area.setAttribute('d', d+'Z'); el.appendChild(area);
+    axes.forEach(function(ax,i){ var p=pt(i,dataR(ax.value));
+      el.appendChild(svg('circle',{ cx:p[0], cy:p[1], r:3.6, fill:ax.color||color, 'class':'radar-dot' })); });
+    var wrap=document.createElement('div'); wrap.className='radar-wrap'; wrap.appendChild(el);
+    return wrap;
+  }
+
+  /* --------------------- Curva de campana (CI) -------------------- */
+  function makeBellCurve(cog){
+    var W=340, H=176, padX=26, baseY=H-36, top=14, loIQ=55, hiIQ=145, amp=baseY-top;
+    function x(iq){ return padX+(iq-loIQ)/(hiIQ-loIQ)*(W-2*padX); }
+    function g(iq){ var z=(iq-100)/15; return Math.exp(-z*z/2); }
+    var el=svg('svg',{ viewBox:'0 0 '+W+' '+H, 'class':'bell' });
+    var area='M '+padX+' '+baseY, line='';
+    for(var iq=loIQ; iq<=hiIQ; iq+=2){ var px=x(iq), py=baseY-g(iq)*amp;
+      area+=' L '+px.toFixed(1)+' '+py.toFixed(1); line+=(line?'L':'M')+px.toFixed(1)+' '+py.toFixed(1)+' '; }
+    area+=' L '+x(hiIQ)+' '+baseY+' Z';
+    el.appendChild(svg('path',{ d:area, 'class':'bell-area' }));
+    el.appendChild(svg('path',{ d:line, 'class':'bell-curve' }));
+    [70,85,100,115,130].forEach(function(tk){ var px=x(tk);
+      el.appendChild(svg('line',{ x1:px, y1:baseY, x2:px, y2:baseY+4, 'class':'bell-tick' }));
+      var tl=svg('text',{ x:px, y:baseY+15, 'class':'bell-tickl', 'text-anchor':'middle' }); tl.textContent=tk; el.appendChild(tl);
+    });
+    el.appendChild(svg('line',{ x1:padX, y1:baseY, x2:W-padX, y2:baseY, 'class':'bell-base' }));
+    cog.forEach(function(c, idx){ var cx=x(Math.max(loIQ,Math.min(hiIQ,c.iq))), cy=baseY-g(c.iq)*amp;
+      var ly=Math.max(10, cy-8-idx*11); // escalonado: evita que g/Gf/Gc se solapen si los CI están cerca
+      el.appendChild(svg('line',{ x1:cx, y1:baseY, x2:cx, y2:cy, 'class':'bell-mark', stroke:c.color }));
+      el.appendChild(svg('circle',{ cx:cx, cy:cy, r:4.2, fill:c.color, 'class':'bell-dot' }));
+      var lab=svg('text',{ x:cx, y:ly, 'text-anchor':'middle', 'class':'bell-lab', fill:c.color }); lab.textContent=c.key; el.appendChild(lab);
+    });
+    var wrap=document.createElement('div'); wrap.className='bell-wrap'; wrap.appendChild(el);
+    var capEl=document.createElement('div'); capEl.className='bell-cap';
+    capEl.innerHTML='La mayoría de las personas se sitúa cerca de 100 (el centro). Cuanto más a la derecha, mayor la puntuación.<br><b>g</b> = capacidad general · <b>Gf</b> = razonamiento · <b>Gc</b> = conocimiento.';
+    wrap.appendChild(capEl);
+    return wrap;
+  }
+
+  /* ----------------------------- Barras --------------------------- */
+  function makeBars(rows, scoreMode){
     var wrap=document.createElement('div'); wrap.className='bars';
     rows.forEach(function(r){
       var v=Math.max(0,Math.min(100,r.value||0));
       var row=document.createElement('div'); row.className='bar-row';
+      var meta=(r.lvl?esc(r.lvl)+' · ':'')+(scoreMode?(v+'/100'):('P'+v));
       row.innerHTML=
         '<div class="bar-head"><b>'+esc(r.label)+(r.sub?' <span class="muted small">'+esc(r.sub)+'</span>':'')+'</b>'+
-        '<span class="lvl">'+esc(r.lvl||'')+' · P'+v+'</span></div>'+
-        '<div class="track"><i style="background:linear-gradient(90deg,'+r.color+',#33d6a6)"></i></div>';
+        '<span class="lvl">'+meta+'</span></div>'+
+        '<div class="track"><i style="background:linear-gradient(90deg,'+(r.color||'#5b8cff')+',#33d6a6)"></i></div>';
       row._fill=row.querySelector('i'); row._target=v;
       wrap.appendChild(row);
     });
-    wrap._rows=rows.length?wrap.querySelectorAll('.bar-row'):[];
     return wrap;
   }
 
+  /* --------------------------- Animación -------------------------- */
   function animateReport(root){
-    // Tarjetas: entrada escalonada
-    gFrom(root.querySelectorAll('.card'),{ y:26, opacity:0, duration:.5, stagger:.08, ease:'power3.out' });
-    // Gauges
-    root.querySelectorAll('.gauge').forEach(function(g,i){
-      if(GS) GS.delayedCall(.3+i*.08, g._anim); else g._anim();
-    });
-    // Barras
+    gFrom(root.querySelectorAll('.card'),{ y:24, opacity:0, duration:.5, stagger:.07, ease:'power3.out' });
+    gFrom(root.querySelectorAll('.snap-tile'),{ y:14, opacity:0, duration:.5, stagger:.05, delay:.15, ease:'power3.out' });
+    gFrom(root.querySelectorAll('.insight-card, .lvl-chip, .stat-chip'),{ y:12, opacity:0, duration:.45, stagger:.04, delay:.2, ease:'power3.out' });
     root.querySelectorAll('.bar-row').forEach(function(row,i){
       var fill=row._fill, target=(row._target||0)+'%';
-      if(GS) GS.to(fill,{ width:target, duration:1.1, delay:.35+i*.05, ease:'power2.out' });
+      if(GS) GS.to(fill,{ width:target, duration:1, delay:.3+i*.05, ease:'power2.out' });
       else fill.style.width=target;
     });
+    if(!GS) return;
+    root.querySelectorAll('.radar-area').forEach(function(a){ GS.from(a,{ opacity:0, duration:.7, ease:'power2.out', delay:.2 }); });
+    root.querySelectorAll('.radar-dot').forEach(function(d,i){ GS.from(d,{ scale:0, transformOrigin:'50% 50%', duration:.4, delay:.35+i*.05, ease:'back.out(2)' }); });
+    root.querySelectorAll('.bell-curve').forEach(function(c){
+      var len=(c.getTotalLength?c.getTotalLength():400); c.style.strokeDasharray=len;
+      GS.fromTo(c,{ strokeDashoffset:len },{ strokeDashoffset:0, duration:1.1, ease:'power2.out', delay:.3 });
+    });
+    root.querySelectorAll('.bell-dot').forEach(function(d,i){ GS.from(d,{ scale:0, transformOrigin:'50% 50%', duration:.45, delay:.8+i*.12, ease:'back.out(2)' }); });
+    root.querySelectorAll('.spec-marker').forEach(function(mk){ GS.from(mk,{ opacity:0, y:-8, duration:.5, delay:.7, ease:'power3.out' }); });
   }
 
-  function badge(t,alt){ return '<span class="badge'+(alt?' alt':'')+'">'+esc(t)+'</span>'; }
+  /* ------------------------ Exportar a PDF ------------------------ */
+  function downloadPdf(){
+    var root=$('report-root');
+    var btns=Array.prototype.slice.call(document.querySelectorAll('.pdf-btn'));
+    btns.forEach(function(b){ b.disabled=true; if(!b.dataset.t) b.dataset.t=b.textContent; b.textContent='Generando PDF…'; });
+    function restore(){ btns.forEach(function(b){ b.disabled=false; if(b.dataset.t) b.textContent=b.dataset.t; }); }
+    if(typeof html2pdf==='undefined'){ restore(); window.print(); return; }
+
+    var name=String((STATE.participant&&STATE.participant.name)||'Perfil')
+      .replace(/[^\wÀ-ÿ \-]/g,'').trim().replace(/\s+/g,'-') || 'Perfil';
+    // Mide la altura real con el detalle desplegado. Añadir y quitar 'pdf-mode' en el
+    // mismo frame fuerza max-height:none (medida exacta) sin que el usuario vea el cambio.
+    document.body.classList.add('pdf-mode');
+    var h=root.scrollHeight||3000;
+    document.body.classList.remove('pdf-mode');
+    // Escala dinámica: mantiene el lienzo de html2canvas bajo el límite (~16k px).
+    var scale=Math.min(2, Math.max(1.0, 15000/h));
+    var opt={
+      margin:[26,16,30,16],
+      filename:'Perfil-Integral-'+name+'.pdf',
+      image:{ type:'jpeg', quality:0.96 },
+      html2canvas:{ scale:scale, backgroundColor:'#0a0f20', useCORS:true, windowWidth:root.scrollWidth,
+        onclone:function(doc){ doc.body.classList.add('pdf-mode');
+          Array.prototype.forEach.call(doc.querySelectorAll('.detail'), function(d){ d.classList.add('open'); }); } },
+      jsPDF:{ unit:'pt', format:'a4', orientation:'portrait' },
+      pagebreak:{ mode:['css','legacy'], avoid:['.snap-tile','.insight-card','.bullet','.takeaway','.reco','.stat-chip','.lvl-chip','.radar-wrap','.bell-wrap','.sec-head'] }
+    };
+    setTimeout(function(){
+      html2pdf().set(opt).from(root).save().then(restore).catch(function(e){ restore(); alert('No se pudo generar el PDF: '+e); });
+    }, 60);
+  }
+
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 })();
 </script>
